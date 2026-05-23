@@ -1,0 +1,21 @@
+sources:
+  - name: jaffle_shop
+    database: raw  
+    schema: jaffle_shop  
+    description: A clone of a Postgres application database.
+    config:
+      freshness:
+        warn_after:
+          count: 6
+          period: hour
+        error_after:
+          count: 60
+          period: day
+      loaded_at_field: _etl_loaded_at
+    tables:
+      - name: customers
+        description: Raw customer data
+        config:
+          freshness: null
+      - name: orders
+        description: Raw orders data.
