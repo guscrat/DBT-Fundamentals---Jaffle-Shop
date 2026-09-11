@@ -1,13 +1,70 @@
-Welcome to your new dbt project!
+# dbt Fundamentals — Jaffle Shop (DuckDB edition)
 
-### Using the starter project
+Projeto do curso dbt Fundamentals, originalmente rodado no dbt Cloud com
+Snowflake. Este repositório foi adaptado para rodar **localmente com DuckDB**,
+então o setup precisa de alguns passos manuais antes do primeiro `dbt run`.
 
-Try running the following commands:
-- dbt run
-- dbt test
+## Arquitetura
 
+- `jaffle_shop.duckdb` — banco "dev" onde o dbt materializa as models
+  (staging, marts). Gerado pelo próprio `dbt run`, não é versionado.
+- `raw.duckdb` — banco com os dados brutos (`jaffle_shop.customers`,
+  `jaffle_shop.orders`, `stripe.payment`), anexado ao dbt como o database
+  `raw` via `profiles.yml`. Também não é versionado — é recriado pelo
+  `load_raw.py`.
 
-### Resources:
+## Setup
+
+### 1. Instalar as dependências
+
+```bash
+uv sync
+source .venv/bin/activate
+```
+
+### 2. Configurar o `profiles.yml`
+
+O dbt lê o profile em `~/.dbt/profiles.yml` (fora do repositório). Crie/edite
+esse arquivo com:
+
+```yaml
+default:
+  target: dev
+  outputs:
+    dev:
+      type: duckdb
+      path: jaffle_shop.duckdb
+      threads: 4
+      attach:
+        - path: raw.duckdb
+          alias: raw
+```
+
+> O `path` de `jaffle_shop.duckdb` e `raw.duckdb` é relativo ao diretório de
+> onde você roda o dbt — rode os comandos sempre a partir da raiz do projeto.
+
+### 3. Carregar os dados brutos
+
+Os dados fonte (customers, orders, payments) não vêm com o repositório.
+Rode o script abaixo para baixá-los e popular o `raw.duckdb`:
+
+```bash
+python load_raw.py
+```
+
+Isso cria `raw.duckdb` com os schemas `jaffle_shop` e `stripe` esperados
+pelos sources em `models/staging/*/`.
+
+### 4. Rodar o dbt
+
+```bash
+dbt debug   # confere se o adapter/profile foram encontrados
+dbt run
+dbt test
+```
+
+## Resources
+
 - Learn more about dbt [in the docs](https://docs.getdbt.com/docs/introduction)
 - Check out [Discourse](https://discourse.getdbt.com/) for commonly asked questions and answers
 - Join the [dbt community](https://getdbt.com/community) to learn from other analytics engineers

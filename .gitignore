@@ -9,3 +9,6 @@ target/
 dbt_packages/
 logs/
 .user.yml
+raw.duckdb
+jaffle_shop.duckdb
+.vscode/
