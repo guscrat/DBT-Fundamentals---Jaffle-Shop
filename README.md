@@ -82,6 +82,12 @@ dbt run
 dbt test
 ```
 
+## Orquestração
+
+Este projeto também é orquestrado via Airflow no repositório
+[`airflow-lab`](https://github.com/guscrat/airflow-lab), que encadeia
+`load_raw.py -> dbt run -> dbt test` como um DAG.
+
 ## Resources
 
 - Learn more about dbt [in the docs](https://docs.getdbt.com/docs/introduction)
