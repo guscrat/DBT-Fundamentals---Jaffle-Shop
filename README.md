@@ -75,9 +75,23 @@ source .venv/bin/activate
 gcloud auth application-default login
 ```
 
-Isso gera as credenciais OAuth que tanto o `load_raw.py` quanto o dbt
-(via `profiles.yml`) usam para falar com o BigQuery — nenhuma chave de
-service account é versionada no repositório.
+Isso gera as **Application Default Credentials (ADC)**: um arquivo de
+credenciais OAuth salvo fora do repositório (em
+`~/.config/gcloud/application_default_credentials.json`) que qualquer
+biblioteca cliente do Google (`google-cloud-bigquery`, incluído) sabe
+localizar sozinha, sem precisar apontar caminho nenhum no código.
+
+É essa mesma credencial que autentica os dois pontos de acesso ao
+BigQuery neste projeto:
+
+- `load_raw.py`, porque `bigquery.Client(project=PROJECT, ...)` não recebe
+  nenhuma credencial explícita — ele resolve via ADC por padrão.
+- o dbt, porque o `profiles.yml` usa `method: oauth`, que também delega
+  para as ADC.
+
+Ou seja, nenhuma chave de service account é versionada no repositório:
+tanto o script de carga quanto o dbt reaproveitam o login feito uma única
+vez com o `gcloud`.
 
 ### 3. Configurar o `profiles.yml`
 
