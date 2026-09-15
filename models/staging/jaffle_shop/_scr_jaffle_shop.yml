@@ -1,6 +1,5 @@
 sources:
   - name: jaffle_shop
-    database: raw  
     schema: jaffle_shop  
     description: A clone of a Postgres application database.
     config:

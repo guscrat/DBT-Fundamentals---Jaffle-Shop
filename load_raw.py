@@ -1,23 +1,68 @@
-import duckdb
+"""
+Carrega os CSVs públicos do jaffle shop como tabelas no BigQuery.
+Versão BigQuery (sandbox) — substitui a versão DuckDB.
 
-con = duckdb.connect("raw.duckdb")
-con.sql("INSTALL httpfs; LOAD httpfs;")
-con.sql("CREATE SCHEMA IF NOT EXISTS jaffle_shop;")
-con.sql("CREATE SCHEMA IF NOT EXISTS stripe;")
+Pré-requisitos:
+  uv add google-cloud-bigquery pandas pyarrow requests
+  gcloud auth application-default login   # mesma auth do profiles.yml (oauth)
 
-base = "https://dbt-tutorial-public.s3.amazonaws.com"
+Sandbox-safe: usa load jobs (não streaming, não DML).
+"""
 
-con.sql(f"CREATE OR REPLACE TABLE jaffle_shop.customers AS "
-        f"SELECT * FROM read_csv_auto('{base}/jaffle_shop_customers.csv')")
+import io
+from datetime import datetime, timezone
 
-con.sql(f"CREATE OR REPLACE TABLE jaffle_shop.orders AS "
-        f"SELECT *, current_timestamp AS _etl_loaded_at "
-        f"FROM read_csv_auto('{base}/jaffle_shop_orders.csv')")
+import pandas as pd
+import requests
+from google.cloud import bigquery
 
-con.sql(f"CREATE OR REPLACE TABLE stripe.payment AS "
-        f"SELECT *, current_timestamp AS _batched_at "
-        f"FROM read_csv_auto('{base}/stripe_payments.csv')")
+# ---- ajusta aqui ----
+PROJECT = "jaffle-shop-bq"   # id do teu projeto sandbox no GCP
+LOCATION = "US"              # sandbox roda em US (bate com o profiles.yml)
+# ---------------------
 
-print(con.sql("SHOW ALL TABLES"))
-con.close()
-print("Pronto! raw.duckdb criado.")
+BASE = "https://dbt-tutorial-public.s3.amazonaws.com"
+
+client = bigquery.Client(project=PROJECT, location=LOCATION)
+
+# datasets espelhando os schemas que existiam no raw.duckdb
+for ds in ("jaffle_shop", "stripe"):
+    client.create_dataset(bigquery.Dataset(f"{PROJECT}.{ds}"), exists_ok=True)
+    print(f"dataset ok: {ds}")
+
+
+def csv_to_df(filename: str) -> pd.DataFrame:
+    """Baixa o CSV público pra memória e devolve como DataFrame."""
+    resp = requests.get(f"{BASE}/{filename}", timeout=60)
+    resp.raise_for_status()
+    return pd.read_csv(io.BytesIO(resp.content), encoding="utf-8-sig")
+
+
+def load(df: pd.DataFrame, table: str) -> None:
+    """Sobe o DataFrame pro BigQuery via load job (WRITE_TRUNCATE = CREATE OR REPLACE)."""
+    job = client.load_table_from_dataframe(
+        df,
+        table,
+        job_config=bigquery.LoadJobConfig(write_disposition="WRITE_TRUNCATE"),
+    )
+    job.result()  # espera terminar
+    print(f"{table}: {job.output_rows} linhas")
+
+
+# timestamp único do batch, igual o current_timestamp fazia no DuckDB
+now = datetime.now(timezone.utc)
+
+# jaffle_shop.customers — sem coluna extra
+load(csv_to_df("jaffle_shop_customers.csv"), f"{PROJECT}.jaffle_shop.customers")
+
+# jaffle_shop.orders — + _etl_loaded_at
+orders = csv_to_df("jaffle_shop_orders.csv")
+orders["_etl_loaded_at"] = now
+load(orders, f"{PROJECT}.jaffle_shop.orders")
+
+# stripe.payment — + _batched_at
+payment = csv_to_df("stripe_payments.csv")
+payment["_batched_at"] = now
+load(payment, f"{PROJECT}.stripe.payment")
+
+print("Pronto! Raw carregado no BigQuery.")
