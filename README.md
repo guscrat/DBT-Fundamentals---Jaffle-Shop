@@ -1,10 +1,14 @@
-# dbt Fundamentals — Jaffle Shop (DuckDB edition)
+# dbt Fundamentals — Jaffle Shop (BigQuery edition)
 
 Projeto do curso dbt Fundamentals, originalmente rodado no dbt Cloud com
-Snowflake. Este repositório foi adaptado para rodar **localmente com DuckDB**,
-então o setup precisa de alguns passos manuais antes do primeiro `dbt run`.
+Snowflake. Passou por duas migrações desde então: primeiro para **DuckDB
+local** (só para estudo, sem depender de warehouse na nuvem) e agora para o
+**sandbox do BigQuery**, então o setup precisa de alguns passos manuais antes
+do primeiro `dbt run`.
 
-## Por que migrei de Snowflake para DuckDB
+## Histórico de migrações
+
+### Snowflake → DuckDB
 
 O curso original usa dbt Cloud + Snowflake, que dependem de um data warehouse
 gerenciado na nuvem — bom para o contexto do curso, mas overkill para rodar
@@ -17,20 +21,44 @@ o projeto localmente só para estudo. Troquei para DuckDB para poder:
 - Ter um projeto reprodutível por qualquer pessoa com Python instalado,
   sem precisar de conta em nenhum data warehouse.
 
-A troca não é só de connection string: exigiu trocar o adapter
+A troca não foi só de connection string: exigiu trocar o adapter
 (`dbt-snowflake` → `dbt-duckdb`), reconstruir a camada de dados brutos
 (`load_raw.py`, já que não há mais um schema `RAW` pré-populado no
 warehouse) e ajustar um mismatch de nome de tabela/source que só apareceu
 depois da migração (`stripe.payments` → `stripe.payment`).
 
+### DuckDB → BigQuery
+
+O DuckDB é ótimo pra estudar dbt sem fricção, mas roda tudo num arquivo
+local — nenhuma das partes "de nuvem" de um projeto de dados real (auth,
+projeto/dataset, load jobs, etc.) aparece na prática. Migrei para o
+**sandbox do BigQuery** pra treinar com um warehouse de nuvem de verdade:
+
+- Autenticação via `gcloud auth application-default login` em vez de um
+  arquivo de banco local.
+- Dados brutos carregados via *load jobs* do BigQuery (`load_raw.py` agora
+  baixa os CSVs, monta DataFrames com pandas e sobe com
+  `google-cloud-bigquery`), em vez de `read_csv_auto` direto no DuckDB.
+- Datasets do BigQuery (`jaffle_shop`, `stripe`) no lugar dos schemas
+  attachados por arquivo do DuckDB — não existe mais um database `raw`
+  separado, então os `sources.yml` perderam o campo `database: raw`.
+- Um ajuste de tipo que o BigQuery exige e o DuckDB deixava passar:
+  `order_date` precisou de `cast(... as date)` explícito em
+  `stg_jaffle_shop__orders.sql`.
+
+O adapter trocou de `dbt-duckdb` para `dbt-bigquery`, e o profile passou a
+se chamar `jaffle_shop` (antes `default`).
+
 ## Arquitetura
 
-- `jaffle_shop.duckdb` — banco "dev" onde o dbt materializa as models
-  (staging, marts). Gerado pelo próprio `dbt run`, não é versionado.
-- `raw.duckdb` — banco com os dados brutos (`jaffle_shop.customers`,
-  `jaffle_shop.orders`, `stripe.payment`), anexado ao dbt como o database
-  `raw` via `profiles.yml`. Também não é versionado — é recriado pelo
-  `load_raw.py`.
+- **BigQuery (projeto sandbox)** — os dados brutos e as models materializadas
+  vivem em um projeto do GCP (ex.: `jaffle-shop-bq`, região `US`), não mais
+  em arquivos locais.
+- Datasets `jaffle_shop` e `stripe` — contêm as tabelas brutas
+  (`jaffle_shop.customers`, `jaffle_shop.orders`, `stripe.payment`),
+  recriadas pelo `load_raw.py` via load job (`WRITE_TRUNCATE`).
+- As models de staging/marts do dbt são materializadas no mesmo projeto,
+  conforme o `dataset`/`schema` configurado no `profiles.yml`.
 
 ## Setup
 
@@ -41,40 +69,50 @@ uv sync
 source .venv/bin/activate
 ```
 
-### 2. Configurar o `profiles.yml`
+### 2. Autenticar no GCP
+
+```bash
+gcloud auth application-default login
+```
+
+Isso gera as credenciais OAuth que tanto o `load_raw.py` quanto o dbt
+(via `profiles.yml`) usam para falar com o BigQuery — nenhuma chave de
+service account é versionada no repositório.
+
+### 3. Configurar o `profiles.yml`
 
 O dbt lê o profile em `~/.dbt/profiles.yml` (fora do repositório). Crie/edite
 esse arquivo com:
 
 ```yaml
-default:
+jaffle_shop:
   target: dev
   outputs:
     dev:
-      type: duckdb
-      path: jaffle_shop.duckdb
+      type: bigquery
+      method: oauth
+      project: jaffle-shop-bq   # id do teu projeto sandbox no GCP
+      dataset: jaffle_shop
+      location: US
       threads: 4
-      attach:
-        - path: raw.duckdb
-          alias: raw
 ```
 
-> O `path` de `jaffle_shop.duckdb` e `raw.duckdb` é relativo ao diretório de
-> onde você roda o dbt — rode os comandos sempre a partir da raiz do projeto.
+> Ajuste `project` para o id do teu projeto sandbox — o mesmo valor usado na
+> constante `PROJECT` de `load_raw.py`.
 
-### 3. Carregar os dados brutos
+### 4. Carregar os dados brutos
 
 Os dados fonte (customers, orders, payments) não vêm com o repositório.
-Rode o script abaixo para baixá-los e popular o `raw.duckdb`:
+Rode o script abaixo para baixá-los e populá-los no BigQuery:
 
 ```bash
 python load_raw.py
 ```
 
-Isso cria `raw.duckdb` com os schemas `jaffle_shop` e `stripe` esperados
-pelos sources em `models/staging/*/`.
+Isso cria os datasets `jaffle_shop` e `stripe` no projeto configurado, com
+as tabelas esperadas pelos sources em `models/staging/*/`.
 
-### 4. Rodar o dbt
+### 5. Rodar o dbt
 
 ```bash
 dbt debug   # confere se o adapter/profile foram encontrados
