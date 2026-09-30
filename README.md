@@ -6,6 +6,56 @@ local** (só para estudo, sem depender de warehouse na nuvem) e agora para o
 **sandbox do BigQuery**, então o setup precisa de alguns passos manuais antes
 do primeiro `dbt run`.
 
+## Resultado: dashboard de clientes
+
+O pipeline termina em um dashboard no **Looker Studio** que lê as models
+de marts direto do BigQuery. Os dados brutos saem do sistema da loja e do gateway de
+pagamento e viram os indicadores que o time de negócio acompanha.
+
+[![Dashboard Jaffle Shop no Looker Studio](assets/dashboard.png)](https://datastudio.google.com/s/lUn7P9Hb7WE)
+
+🔗 **[Abrir o dashboard interativo](https://datastudio.google.com/s/lUn7P9Hb7WE)**
+
+| Indicador | Valor | De onde vem |
+|---|---|---|
+| Clientes | 100 | `dim_customers` |
+| Ordens | 99 | `fct_orders` |
+| Faturamento | 1.672 | `sum(fct_orders.amount)`: só pagamentos com status `success` |
+| Ticket médio | 16,89 | faturamento ÷ ordens |
+| Ordens por mês | jan–abr/2018 | `fct_orders.order_date` agregado por mês |
+
+### O que o dbt garante por trás de cada número
+
+- **Faturamento real, não faturamento "tentado"**: `fct_orders` soma apenas
+  pagamentos com `payment_status = 'success'`. Pagamentos que falharam não
+  inflam a receita.
+- **Unidade correta**: o Stripe registra valores em centavos, e a staging
+  (`stg_strip__payments`) converte para a unidade monetária uma única vez.
+  Todo consumidor downstream (dashboard, `dim_customers.lifetime_value`) já
+  recebe o valor certo.
+- **Uma única fonte da verdade**: o dashboard não tem SQL próprio nem regra
+  de negócio escondida em campo calculado. As regras ficam versionadas e
+  testadas no dbt (`dbt test`), e o Looker Studio só apresenta.
+- **Pipeline reprodutível**: `load_raw.py -> dbt run -> dbt test` é
+  orquestrado pelo Airflow (ver [Orquestração](#orquestração)), então o
+  dashboard reflete dados atualizados sem passo manual.
+
+```
+CSVs brutos ──► BigQuery (jaffle_shop, stripe)
+                    │
+                    ▼
+            staging (stg_*)  ── limpeza, renomeação, centavos → moeda
+                    │
+                    ▼
+     marts (fct_orders, dim_customers) ── regras de negócio + testes
+                    │
+                    ▼
+            Looker Studio (dashboard)
+```
+
+> Abril/2018 aparece com poucas ordens porque o dataset de exemplo termina
+> no início do mês. Não é queda de vendas.
+
 ## Histórico de migrações
 
 ### Snowflake → DuckDB
